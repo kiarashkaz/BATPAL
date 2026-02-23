@@ -1,0 +1,11 @@
+#field_size: 12
+#players: 4
+#max_food: 3
+force_coop: True
+sight: 5
+field_size: 10
+players: 5
+max_food: 10
+obs_agent_adversary: False
+state_type: FP
+stack_share_obs: True
