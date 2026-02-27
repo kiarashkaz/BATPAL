@@ -94,7 +94,8 @@ Each run contains:
 
 ## 6. Citation
 
-If you use this repository, please cite 
+If you use this repository, please cite the follwing paper.
+
 Kiarash Kazari, György Dán, ``Bayesian Robust Cooperative Multi-Agent Reinforcement Learning Against Unknown Adversaries'',
 in Proc. of ICLR, 2026
 
