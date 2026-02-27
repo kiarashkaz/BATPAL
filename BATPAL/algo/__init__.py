@@ -10,8 +10,5 @@ ALGO_REGISTRY = {
     "mappo_no_adv": MAPPOAdvtBelief,
     "mappo_advt_ec_belief": MAPPOAdvtECBelief,
     "mappo_multi_type_belief": MAPPOMultiTypeBelief,
-    "gen_maxmin": MAPPOAdvtBelief,
-    "rap": MAPPOMultiTypeBelief,
-    "fixed_adv": MAPPOAdvtBelief,
     "fixed_types_adv": MAPPOMultiTypeBelief,
 }

@@ -13,13 +13,10 @@ def main():
         type=str,
         default="mappo_multi_type_belief",
         choices=[
-            "mappo_advt_belief",
-            "mappo_traitor_belief",
             "mappo_fixed_benign",
             "mappo_no_adv",
             "mappo_advt_ec_belief",
             "mappo_multi_type_belief",
-            "fixed_adv",
             "fixed_types_adv",
         ],
         help="Algorithm name.",

@@ -2,7 +2,6 @@
 import time
 import numpy as np
 import torch
-from concurrent.futures import ThreadPoolExecutor
 from BATPAL.common.popart import PopArt
 from BATPAL.common.actor_buffer_type_belief import ActorBufferTypeBelief
 from BATPAL.common.critic_buffer_ep import CriticBufferEP
@@ -150,7 +149,7 @@ class OnPolicyMultiTypeRunner:
                 for agent_id in range(1, self.num_agents):
                     self.baseline_actor.append(self.baseline_actor[0])
             if self.adv_model_dir is not None:
-                self.evaluate_external = algo_args["eval"].get("evaluate_external", False)
+                self.evaluate_external = algo_args["eval"].get("evaluate_external", False) # For unseen Dynamic advs
                 if self.evaluate_external:
                     self.external_adv = PolicyAgent(45,128,6 , False, True) #2s3z(80, 64, 11), MMM(160,128,16), spread(18,128,5), LBF(45,128,6)
                     self.external_adv_hidden_size = 128
@@ -236,128 +235,132 @@ class OnPolicyMultiTypeRunner:
                         self.eval_adv_external()
                     return
 
-        rollout_executor = ThreadPoolExecutor(max_workers=2) if self.baseline_policy is not None else None
-        try:
-            for episode in range(1, episodes + 1):
+        for episode in range(1, episodes + 1):
 
-                if episode > episodes / 2:
-                    self.teacher_forcing = False
+            if episode > episodes / 2:
+                self.teacher_forcing = False
+            else:
+                self.save_checkpoint = True
+                self.true_type_prob = 1 -  (episode - 1) / (episodes / 2)
+            if self.forced_belief:
+                self.true_type_prob = 0
+            if self.forced_no_belief:
+                self.true_type_prob = 1
+                self.teacher_forcing = True
+
+            self.ground_truth_type = np.zeros((self.n_rollout_threads, self.num_agents, self.belief_shape))
+            if self.use_linear_lr_decay:
+                if self.share_param:
+                    self.actor[0].lr_decay(episode, episodes)
                 else:
-                    self.save_checkpoint = True
-                    self.true_type_prob = 1 -  (episode - 1) / (episodes / 2)
-                if self.forced_belief:
-                    self.true_type_prob = 0
-                if self.forced_no_belief:
-                    self.true_type_prob = 1
-                    self.teacher_forcing = True
+                    for agent_id in range(self.num_agents):
+                        self.actor[agent_id].lr_decay(episode, episodes)
+                self.critic.lr_decay(episode, episodes)
 
-                self.ground_truth_type = np.zeros((self.n_rollout_threads, self.num_agents, self.belief_shape))
-                if self.use_linear_lr_decay:
-                    if self.share_param:
-                        self.actor[0].lr_decay(episode, episodes)
-                    else:
-                        for agent_id in range(self.num_agents):
-                            self.actor[agent_id].lr_decay(episode, episodes)
-                    self.critic.lr_decay(episode, episodes)
+            self.logger.episode_init(episode)
 
-                self.logger.episode_init(episode)
+            self.prep_rollout()
+            if self.random_adversary:                
+                self.agent_adversary = np.random.choice(range(self.num_agents))
+            if self.adapt_adversary:
+                self.severity_ind = np.random.choice(range(self.n_severity_types), p=softmax(-1 * self.adapt_adv_probs / 1))
+            else:
+                self.severity_ind = np.random.choice(range(self.n_severity_types))
+            if episode % self.victim_interval == 0:  # which means some episodes are not adversary
+                self.episode_adversary = (np.random.rand(self.n_rollout_threads) < self.adv_prob)
+            else:
+                self.episode_adversary = (np.random.rand(self.n_rollout_threads) < 2)  # all True
+            
+            # kepts the same size as belief for convinence
+            self.ground_truth_type[self.episode_adversary, :, self.agent_adversary] = 1
+            self.ground_truth_type[self.episode_adversary, :, -self.n_severity_types + self.severity_ind] = 1
 
-                self.prep_rollout()
-                if self.random_adversary:                
-                    self.agent_adversary = np.random.choice(range(self.num_agents))
-                if self.adapt_adversary:
-                    self.severity_ind = np.random.choice(range(self.n_severity_types), p=softmax(-1 * self.adapt_adv_probs / 1))
-                else:
-                    self.severity_ind = np.random.choice(range(self.n_severity_types))
-                if episode % self.victim_interval == 0:  # which means some episodes are not adversary
-                    self.episode_adversary = (np.random.rand(self.n_rollout_threads) < self.adv_prob)
-                else:
-                    self.episode_adversary = (np.random.rand(self.n_rollout_threads) < 2)  # all True
-                
-                # kepts the same size as belief for convinence
-                self.ground_truth_type[self.episode_adversary, :, self.agent_adversary] = 1
-                self.ground_truth_type[self.episode_adversary, :, -self.n_severity_types + self.severity_ind] = 1
+            if self.baseline_policy is not None:
+                self.baseline_ground_truth_type.fill(0)
+                self.baseline_ground_truth_type[:, :, self.agent_adversary] = 1
+                self.baseline_ground_truth_type[:, :, -self.n_severity_types + self.severity_ind] = 1
+            
+            for step in range(self.episode_length):
+                main_actions_and_stats = self._collect_main_step(step)
+                main_input_actions = main_actions_and_stats[0]
 
                 if self.baseline_policy is not None:
-                    self.baseline_ground_truth_type.fill(0)
-                    self.baseline_ground_truth_type[:, :, self.agent_adversary] = 1
-                    self.baseline_ground_truth_type[:, :, -self.n_severity_types + self.severity_ind] = 1
-                
-                for step in range(self.episode_length):
-                    if rollout_executor is None:
-                        data = self._rollout_main_step(step)
-                        self.logger.per_step(data)
-                        self.insert(data)
-                    else:
-                        main_future = rollout_executor.submit(self._rollout_main_step, step)
-                        baseline_future = rollout_executor.submit(self._rollout_baseline_step, step)
+                    baseline_actions_and_stats = self._collect_baseline_step(step)
+                    baseline_input_actions = baseline_actions_and_stats[0]
 
-                        data = main_future.result()
-                        baseline_data = baseline_future.result()
+                    # Dispatch both env steps before waiting so subprocess workers overlap.
+                    self.envs.step_async(main_input_actions)
+                    self.baseline_envs.step_async(baseline_input_actions)
+                    main_step_output = self.envs.step_wait()
+                    baseline_step_output = self.baseline_envs.step_wait()
 
-                        self.logger.per_step(data)
-                        self.insert(data)
-                        self.baseline_insert(baseline_data)
+                    data = self._build_step_data(main_step_output, self.ground_truth_type, *main_actions_and_stats[1:])
+                    baseline_data = self._build_step_data(baseline_step_output, self.baseline_ground_truth_type, *baseline_actions_and_stats[1:])
 
-                # compute return and update network
-                self.compute()
-                self.prep_training()
+                    self.logger.per_step(data)
+                    self.insert(data)
+                    self.baseline_insert(baseline_data)
+                else:
+                    self.envs.step_async(main_input_actions)
+                    main_step_output = self.envs.step_wait()
+                    data = self._build_step_data(main_step_output, self.ground_truth_type, *main_actions_and_stats[1:])
 
-                actor_train_infos, critic_train_info = self.share_param_train()  # train adversary and victim
-                # log information
-                if episode % self.log_interval == 0:
-                    self.logger.episode_log(
-                        actor_train_infos, critic_train_info, self.actor_buffer, self.critic_buffer)
+                    self.logger.per_step(data)
+                    self.insert(data)
 
-                # eval
-                if episode % self.eval_interval == 0:
-                    if self.use_eval:
-                        self.prep_rollout()
-                        self.eval()
-                        if self.env_name not in ['pursuit']:
-                            self.eval_adv()
-                            if self.baseline_policy is not None:
-                                self.baseline_eval_adv()
-                    else:
-                        self.save()
+            # compute return and update network
+            self.compute()
+            self.prep_training()
 
-                self.after_update()
-        finally:
-            if rollout_executor is not None:
-                rollout_executor.shutdown(wait=True)
+            actor_train_infos, critic_train_info = self.share_param_train()  # train adversary and victim
+            # log information
+            if episode % self.log_interval == 0:
+                self.logger.episode_log(
+                    actor_train_infos, critic_train_info, self.actor_buffer, self.critic_buffer)
+
+            # eval
+            if episode % self.eval_interval == 0:
+                if self.use_eval:
+                    self.prep_rollout()
+                    self.eval()
+                    if self.env_name not in ['pursuit']:
+                        self.eval_adv()
+                        if self.baseline_policy is not None:
+                            self.baseline_eval_adv()
+                else:
+                    self.save()
+
+            self.after_update()
 
     @torch.no_grad()
-    def _rollout_main_step(self, step):
+    def _collect_main_step(self, step):
         values, actions, adv_actions, action_log_probs, adv_action_log_probs, rnn_states, \
             adv_rnn_states, belief_rnn_states, rnn_states_critic = self.collect_adv(step)
         input_actions = actions.copy()
         input_actions[self.episode_adversary, self.agent_adversary] = adv_actions[self.episode_adversary, self.agent_adversary]
-        obs, share_obs, rewards, dones, infos, available_actions = self.envs.step(input_actions)
-        obs = self._pad_obs(obs, self.belief_shape)
-        if self.stack_share_obs:
-            share_obs = self._stack_obs(share_obs)
-        share_obs = self._pad_obs(share_obs, 2 * self.belief_shape)
-
-        data = obs, share_obs, rewards, dones, infos, self.ground_truth_type, available_actions, \
-            values, actions, adv_actions, action_log_probs, adv_action_log_probs, \
+        return input_actions, values, actions, adv_actions, action_log_probs, adv_action_log_probs, \
             rnn_states, adv_rnn_states, belief_rnn_states, rnn_states_critic
 
-        return data
-
     @torch.no_grad()
-    def _rollout_baseline_step(self, step):
+    def _collect_baseline_step(self, step):
         values, actions, adv_actions, action_log_probs, adv_action_log_probs, rnn_states, \
             adv_rnn_states, belief_rnn_states, rnn_states_critic = self.baseline_collect_adv(step)
         input_actions = actions.copy()
         input_actions[:, self.agent_adversary] = adv_actions[:, self.agent_adversary]
+        return input_actions, values, actions, adv_actions, action_log_probs, adv_action_log_probs, \
+            rnn_states, adv_rnn_states, belief_rnn_states, rnn_states_critic
 
-        obs, share_obs, rewards, dones, infos, available_actions = self.baseline_envs.step(input_actions)
+    def _build_step_data(self, step_output, ground_truth_type, values, actions, adv_actions,
+                         action_log_probs, adv_action_log_probs, rnn_states, adv_rnn_states,
+                         belief_rnn_states, rnn_states_critic):
+        obs, share_obs, rewards, dones, infos, available_actions = step_output
+
         obs = self._pad_obs(obs, self.belief_shape)
         if self.stack_share_obs:
             share_obs = self._stack_obs(share_obs)
         share_obs = self._pad_obs(share_obs, 2 * self.belief_shape)
 
-        data = obs, share_obs, rewards, dones, infos, self.baseline_ground_truth_type, available_actions, \
+        data = obs, share_obs, rewards, dones, infos, ground_truth_type, available_actions, \
             values, actions, adv_actions, action_log_probs, adv_action_log_probs, \
             rnn_states, adv_rnn_states, belief_rnn_states, rnn_states_critic
 
@@ -434,7 +437,7 @@ class OnPolicyMultiTypeRunner:
                 def_act = np.concatenate([*action_collector[-self.num_agents:][:agent_id], 
                                           *action_collector[-self.num_agents:][agent_id + 1:]], axis=-1)
                 adv_obs = np.concatenate([adv_obs, softmax(def_act)], axis=-1)
-            # currently we do not require adversary to have a belief. might need it if communication was added, but not for now
+            
             adv_action, adv_action_log_prob, adv_rnn_state = self.actor[agent_id].get_adv_actions(adv_obs,
                                                                                                   self.baseline_actor_buffer[agent_id].adv_rnn_states[step],
                                                                                                   self.baseline_actor_buffer[agent_id].masks[step],

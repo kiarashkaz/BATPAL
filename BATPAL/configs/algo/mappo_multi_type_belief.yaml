@@ -98,23 +98,35 @@ algo:
   #      for 2s3z
   v_max: 15.3
   v_min: 4.0
-  baseline_policy: "BATPAL/results/smac/2s3z/mappo_no_adv/test/1/run3/models"
+  baseline_policy: "BATPAL/pretrained/baseline_policies/2s3z/models"
   log_barrier_coef: 0.1
 
   #   for lbforaging
   #v_min: 0.3
   #v_max: 0.55
-  #baseline_policy: "BATPAL/results/lbforaging/10x10-5p-10f/mappo_no_adv/test/1/run3/models"
+  #baseline_policy: "BATPAL/pretrained/baseline_policies/LBF/models"
   #log_barrier_coef: 0.2
 
   # for MMM
   #v_min: 10
   #v_max: 16
-  #baseline_policy: "BATPAL/results/smac/MMM/mappo_no_adv/test/1/run2/models"
+  #baseline_policy: "BATPAL/pretrained/baseline_policies/MMM/models"
   #log_barrier_coef: 0.1
 
   #   for pettingzoo_mpe
   #v_min: -130
   #v_max: -50
-  #baseline_policy: "BATPAL/results/pettingzoo_mpe/simple_spread_v3/mappo_no_adv/test/1/run5/models"
+  #baseline_policy: "BATPAL/pretrained/baseline_policies/MPE/models"
   #log_barrier_coef: 0.2
+
+  # for 11m
+  #v_min: 10
+  #v_max: 16
+  #baseline_policy: "BATPAL/pretrained/baseline_policies/11m/models"
+  #log_barrier_coef: 0.1
+
+  # for 1c3s5z
+  #v_min: 7
+  #v_max: 16
+  #baseline_policy: "BATPAL/pretrained/baseline_policies/1c3s5z/models"
+  #log_barrier_coef: 0.1
